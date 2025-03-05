@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Statistics Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+    </style>
+</head>
+<body>
+    <h2>Device Trend Report</h2>
+    <p>Below are statistical trends for the selected device:</p>
+    <ul>
+        {% for row in data %}
+            <li>Timestamp: {{ row["Timestamp"] }} - Battery: {{ row["Battery Level (%)"] }}% - Signal: {{ row["Signal Strength (dBm)"] }}</li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
