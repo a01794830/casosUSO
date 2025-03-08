@@ -1,159 +1,225 @@
 """
-    Pinecone Helper
-    Utilities for vector database operations using Pinecone
+Utilidades para operaciones de base de datos vectorial usando Pinecone.
+Maneja inicialización, conexión y operaciones CRUD con índices vectoriales.
 """
 import time
+import logging
+from typing import List, Dict, Any, Optional, Union
 from pinecone import Pinecone, ServerlessSpec
 from config import Config
 
+logger = logging.getLogger(__name__)
 
-def initialize_pinecone_index(name):
+def initialize_pinecone_index(name: str) -> Optional[Any]:
     """
-    Initialize Pinecone index
+    Inicializa y conecta a un índice de Pinecone.
     
     Args:
-        name (str): Name of the index to create or connect to
+        name (str): Nombre del índice a crear o conectar
         
     Returns:
-        pinecone.Index: Connected index object if successful, None otherwise
+        Optional[Any]: Objeto del índice conectado o None si hay error
     """
+    logger.info(f"Inicializando índice Pinecone: {name}")
     pc = Pinecone(api_key=Config.PINECONE_API_KEY)
+    
     try:
-        # Check if index exists
+        # Verificar si el índice existe
         if name not in pc.list_indexes().names():
+            logger.info(f"Creando nuevo índice: {name}")
             pc.create_index(
                 name=name,
-                dimension=1536,
+                dimension=Config.VECTOR_DIM,
                 metric="cosine",
                 spec=ServerlessSpec(
-                    cloud="aws",
-                    region="us-east-1"  # Virginia - única región disponible en Starter Plan
+                    cloud=Config.PINECONE_CLOUD,
+                    region=Config.PINECONE_REGION
                 )
             )
-            print(f"✅ Index '{name}' created successfully")
-            # Allow time for index to initialize
-            time.sleep(10)
+            logger.info(f"✅ Índice '{name}' creado correctamente")
+            
+            # Esperar a que el índice se inicialice
+            wait_count = 0
+            while wait_count < 30:  # Timeout después de 30 segundos
+                if pc.describe_index(name).status.get("ready", False):
+                    break
+                time.sleep(1)
+                wait_count += 1
+                
+            if wait_count >= 30:
+                logger.warning(f"Timeout esperando inicialización del índice {name}")
         else:
-            print(f"ℹ️ Index '{name}' already exists")
+            logger.info(f"ℹ️ Índice '{name}' ya existe, conectando")
         
-        # Connect to the index
+        # Conectar al índice
         index = pc.Index(name)
+        logger.info(f"Conexión a índice {name} establecida")
         return index
+        
     except Exception as e:
-        print(f"❌ Error with Pinecone index: {e}")
+        logger.error(f"❌ Error con índice Pinecone: {e}", exc_info=True)
         return None
 
 
 class PineconeVectorDB:
     """
-    Class for managing Pinecone vector database operations
+    Clase para gestionar operaciones con la base de datos vectorial Pinecone.
     
-    Handles creation, connection, and operations with Pinecone vector indexes
+    Maneja creación, conexión y operaciones CRUD con índices vectoriales de Pinecone.
     """
-    def __init__(self, name):
+    def __init__(self, name: str):
         """
-        Initialize PineconeVectorDB instance
+        Inicializa una instancia de PineconeVectorDB.
         
         Args:
-            name (str): Name of the Pinecone index to use
+            name (str): Nombre del índice de Pinecone a utilizar
         """
-        # Initialize Pinecone client
+        logger.info(f"Inicializando PineconeVectorDB con índice: {name}")
+        # Inicializar cliente Pinecone
         self.pc = Pinecone(api_key=Config.PINECONE_API_KEY)
         self.name = name
         self.index = None
         self._create_and_connect_index()
         
-    def _create_and_connect_index(self):
-        """Private method to create and connect to index"""
+    def _create_and_connect_index(self) -> None:
+        """
+        Método privado para crear y conectar al índice.
+        Configura spec de acuerdo a valores de config.
+        """
         try:
-            # Check if index exists
+            # Verificar si el índice existe
             if self.name not in self.pc.list_indexes().names():
+                logger.info(f"Creando índice: {self.name}")
                 self.pc.create_index(
                     name=self.name,
-                    dimension=1536,
+                    dimension=Config.VECTOR_DIM,
                     metric="cosine",
                     spec=ServerlessSpec(
-                        cloud="aws",
-                        region="us-east-1"  # Virginia - única región disponible en Starter Plan
+                        cloud=Config.PINECONE_CLOUD,
+                        region=Config.PINECONE_REGION
                     )
                 )
-                print("✅ Index created successfully")
-                # Wait to ensure index is ready
-                time.sleep(20)
+                logger.info("✅ Índice creado correctamente")
+                
+                # Esperar a que el índice esté listo
+                start_time = time.time()
+                while time.time() - start_time < 60:  # Esperar máximo 60 segundos
+                    status = self.pc.describe_index(self.name).status
+                    if status.get("ready", False):
+                        break
+                    time.sleep(2)
             else:
-                print("ℹ️ Index already exists, continuing...")
+                logger.info(f"ℹ️ Índice '{self.name}' ya existe, continuando...")
 
-            # Connect to index
+            # Conectar al índice
             self.index = self.pc.Index(self.name)
-            print("✅ Connection to index established")
-        except Exception as e:
-            print(f"❌ Error with index: {e}")
+            logger.info("✅ Conexión al índice establecida")
             
-    def upsert_vectors(self, vectors):
+        except Exception as e:
+            logger.error(f"❌ Error con índice: {e}", exc_info=True)
+            
+    def upsert_vectors(self, vectors: List[tuple]) -> bool:
         """
-        Insert or update vectors in the index
+        Inserta o actualiza vectores en el índice.
         
         Args:
-            vectors (list): List of vector records with id, values, and metadata
+            vectors (List[tuple]): Lista de tuplas (id, vector, metadata)
             
         Returns:
-            bool: Success status
+            bool: Estado de éxito
         """
         if not self.index:
-            print("❌ No active index connection")
+            logger.error("❌ No hay conexión activa al índice")
             return False
             
-        try:
-            self.index.upsert(vectors=vectors)
+        if not vectors:
+            logger.warning("Lista de vectores vacía, no se realizó upsert")
             return True
+            
+        try:
+            # Procesar en lotes para evitar límites de API
+            BATCH_SIZE = 100
+            for i in range(0, len(vectors), BATCH_SIZE):
+                batch = vectors[i:i+BATCH_SIZE]
+                self.index.upsert(vectors=batch)
+                logger.debug(f"Batch de {len(batch)} vectores insertado correctamente")
+            
+            logger.info(f"✅ {len(vectors)} vectores insertados correctamente")
+            return True
+            
         except Exception as e:
-            print(f"❌ Error upserting vectors: {e}")
+            logger.error(f"❌ Error en upsert_vectors: {e}", exc_info=True)
             return False
             
-    def query(self, vector, top_k=5, include_metadata=True):
+    def query(
+        self, 
+        vector: List[float], 
+        top_k: int = 5, 
+        include_metadata: bool = True,
+        filter: Dict[str, Any] = None
+    ) -> Optional[Dict[str, Any]]:
         """
-        Query the index for similar vectors
+        Consulta el índice para vectores similares.
         
         Args:
-            vector (list): Query vector
-            top_k (int): Number of results to return
-            include_metadata (bool): Whether to include metadata in results
+            vector (List[float]): Vector de consulta
+            top_k (int): Número de resultados a retornar
+            include_metadata (bool): Incluir metadata en resultados
+            filter (Dict[str, Any]): Filtro de metadatos opcional
             
         Returns:
-            dict: Query results or None if error
+            Optional[Dict[str, Any]]: Resultados de la consulta o None si hay error
         """
         if not self.index:
-            print("❌ No active index connection")
+            logger.error("❌ No hay conexión activa al índice")
             return None
             
         try:
-            results = self.index.query(
-                vector=vector,
-                top_k=top_k,
-                include_metadata=include_metadata
-            )
+            kwargs = {
+                "vector": vector,
+                "top_k": top_k,
+                "include_values": False,
+                "include_metadata": include_metadata
+            }
+            
+            if filter:
+                kwargs["filter"] = filter
+                
+            results = self.index.query(**kwargs)
+            logger.debug(f"Query exitosa, {len(results.matches) if results.matches else 0} resultados")
             return results
+            
         except Exception as e:
-            print(f"❌ Error querying index: {e}")
+            logger.error(f"❌ Error en query: {e}", exc_info=True)
             return None
             
-    def delete_vectors(self, ids):
+    def delete_vectors(self, ids: Union[str, List[str]]) -> bool:
         """
-        Delete vectors from the index
+        Elimina vectores del índice.
         
         Args:
-            ids (list): List of vector IDs to delete
+            ids (Union[str, List[str]]): ID único o lista de IDs a eliminar
             
         Returns:
-            bool: Success status
+            bool: Estado de éxito
         """
         if not self.index:
-            print("❌ No active index connection")
+            logger.error("❌ No hay conexión activa al índice")
             return False
+        
+        # Normalizar ids a lista
+        if isinstance(ids, str):
+            ids = [ids]
+            
+        if not ids:
+            logger.warning("Lista de IDs vacía, no se realizó delete")
+            return True
             
         try:
             self.index.delete(ids=ids)
+            logger.info(f"✅ {len(ids)} vectores eliminados correctamente")
             return True
+            
         except Exception as e:
-            print(f"❌ Error deleting vectors: {e}")
+            logger.error(f"❌ Error en delete_vectors: {e}", exc_info=True)
             return False
